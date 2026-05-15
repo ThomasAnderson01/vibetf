@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Protocol, runtime_checkable
+
 import numpy as np
 import pandas as pd
 
@@ -8,31 +10,75 @@ from .factors import get_factor_definition
 from .results import FactorResult
 
 
-def _equal_weight_frame(index: pd.Index, factor_names: list[str]) -> pd.DataFrame:
-    if not factor_names:
-        raise ValueError("至少需要一个因子用于合成")
-    return pd.DataFrame(1.0 / len(factor_names), index=index, columns=factor_names)
+@runtime_checkable
+class CompositeMethod(Protocol):
+    def compute_weights(
+        self,
+        trade_dates: pd.Index,
+        factor_names: list[str],
+        composite_config: CompositeConfig,
+        factor_results: dict[str, FactorResult] | None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None]: ...
 
 
-def _rolling_ic_weights(
-    index: pd.Index,
-    factor_results: dict[str, FactorResult],
-    factor_names: list[str],
-    horizon: int,
-    lookback: int,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    ic_history = pd.DataFrame(
-        {
-            factor_name: factor_results[factor_name].ic_series[horizon].reindex(index)
-            for factor_name in factor_names
-        }
-    )
-    realized_ic_lag = horizon + 1
-    rolling_ic = ic_history.rolling(lookback, min_periods=max(5, lookback // 2)).mean().shift(realized_ic_lag)
-    denom = rolling_ic.abs().sum(axis=1).replace(0, np.nan)
-    weights = rolling_ic.div(denom, axis=0)
-    fallback = _equal_weight_frame(index, factor_names)
-    return weights.where(weights.notna(), fallback), ic_history
+class EqualWeightComposite:
+    def compute_weights(
+        self,
+        trade_dates: pd.Index,
+        factor_names: list[str],
+        composite_config: CompositeConfig,
+        factor_results: dict[str, FactorResult] | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+        if not factor_names:
+            raise ValueError("至少需要一个因子用于合成")
+        weights = pd.DataFrame(1.0 / len(factor_names), index=trade_dates, columns=factor_names)
+        return weights, None
+
+
+class RollingICComposite:
+    def compute_weights(
+        self,
+        trade_dates: pd.Index,
+        factor_names: list[str],
+        composite_config: CompositeConfig,
+        factor_results: dict[str, FactorResult] | None = None,
+    ) -> tuple[pd.DataFrame, pd.DataFrame | None]:
+        if factor_results is None:
+            raise ValueError("rolling_ic 合成需要 factor_results")
+        ic_history = pd.DataFrame(
+            {
+                factor_name: factor_results[factor_name].ic_series[composite_config.ic_horizon].reindex(trade_dates)
+                for factor_name in factor_names
+            }
+        )
+        realized_ic_lag = composite_config.ic_horizon + 1
+        rolling_ic = ic_history.rolling(
+            composite_config.ic_lookback,
+            min_periods=max(5, composite_config.ic_lookback // 2),
+        ).mean().shift(realized_ic_lag)
+        denom = rolling_ic.abs().sum(axis=1).replace(0, np.nan)
+        weights = rolling_ic.div(denom, axis=0)
+        fallback = pd.DataFrame(1.0 / len(factor_names), index=trade_dates, columns=factor_names)
+        return weights.where(weights.notna(), fallback), ic_history
+
+
+COMPOSITE_REGISTRY: dict[str, CompositeMethod] = {
+    "equal": EqualWeightComposite(),
+    "rolling_ic": RollingICComposite(),
+}
+
+
+def register_composite_method(name: str, method: CompositeMethod) -> None:
+    if name in COMPOSITE_REGISTRY:
+        raise KeyError(f"合成方法已注册: {name}")
+    COMPOSITE_REGISTRY[name] = method
+
+
+def get_composite_method(name: str) -> CompositeMethod:
+    try:
+        return COMPOSITE_REGISTRY[name]
+    except KeyError as exc:
+        raise KeyError(f"未知合成方法: {name}") from exc
 
 
 def build_composite_signal(
@@ -54,19 +100,9 @@ def build_composite_signal(
         prepared_bars[trade_date_column].drop_duplicates().sort_values(),
         name=trade_date_column,
     )
-    if composite_config.method == "equal":
-        weights = _equal_weight_frame(trade_dates, factor_names)
-        ic_history = None
-    elif composite_config.method == "rolling_ic":
-        weights, ic_history = _rolling_ic_weights(
-            trade_dates,
-            factor_results,
-            factor_names,
-            horizon=composite_config.ic_horizon,
-            lookback=composite_config.ic_lookback,
-        )
-    else:
-        raise ValueError(f"不支持的 composite method: {composite_config.method}")
+
+    method = get_composite_method(composite_config.method)
+    weights, ic_history = method.compute_weights(trade_dates, factor_names, composite_config, factor_results)
 
     row_weights = pd.DataFrame(
         {

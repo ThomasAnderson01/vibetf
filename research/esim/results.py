@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import pandas as pd
+
+if TYPE_CHECKING:
+    from .config import DataConfig, PortfolioConfig, ResearchConfig
 
 
 @dataclass(frozen=True)
@@ -32,6 +36,9 @@ class CompositeResult:
 class StudyResult:
     prepared_bars: pd.DataFrame
     factor_results: dict[str, FactorResult] = field(default_factory=dict)
+    data_config: DataConfig = field(default=None)
+    research_config: ResearchConfig = field(default=None)
+    portfolio_config: PortfolioConfig = field(default=None)
 
     def get_factor(self, name: str) -> FactorResult:
         return self.factor_results[name]

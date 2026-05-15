@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -101,3 +102,60 @@ def prepare_daily_bars(
         & (df["avg_amount_20d"] >= research_config.min_avg_amount_100m)
     )
     return df.reset_index(drop=True)
+
+
+def default_paths() -> tuple[Path, Path, Path]:
+    repo_root = Path(__file__).resolve().parents[2]
+    daily_root = repo_root / "data" / "raw" / "dmgr" / "tushare" / "fund_daily"
+    metadata_path = repo_root / "research" / "outputs" / "etf_liquidity_snapshot_20260514.csv"
+    output_dir = repo_root / "research" / "esim" / "output" / f"dmgr_stock_etf_{date.today():%Y%m%d}"
+    return daily_root, metadata_path, output_dir
+
+
+def load_real_etf_dataset(
+    daily_root: Path,
+    start_date: str,
+    end_date: str,
+    metadata_path: Path | None = None,
+) -> pd.DataFrame:
+    daily_bars = load_partitioned_daily_table(
+        root=daily_root,
+        file_prefix="fund_daily",
+        start_date=start_date,
+        end_date=end_date,
+    )
+    fund_share_root = daily_root.parent / "fund_share"
+    if fund_share_root.exists():
+        fund_share = load_partitioned_daily_table(
+            root=fund_share_root,
+            file_prefix="fund_share",
+            start_date=start_date,
+            end_date=end_date,
+        )
+        if {"ts_code", "trade_date", "fd_share"}.issubset(fund_share.columns):
+            daily_bars = daily_bars.merge(
+                fund_share[["ts_code", "trade_date", "fd_share"]].drop_duplicates(
+                    ["ts_code", "trade_date"],
+                    keep="last",
+                ),
+                on=["ts_code", "trade_date"],
+                how="left",
+            )
+    if metadata_path is None:
+        return daily_bars
+
+    metadata = pd.read_csv(
+        metadata_path,
+        usecols=[
+            "ts_code",
+            "extname",
+            "mgr_name",
+            "index_code",
+            "index_name",
+            "asset_type",
+            "stock_subtype",
+        ],
+    )
+    dataset = merge_metadata(daily_bars, metadata)
+    dataset["asset_type"] = dataset["asset_type"].fillna("其他")
+    return dataset

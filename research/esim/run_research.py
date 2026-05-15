@@ -10,7 +10,8 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research.esim.config import CompositeConfig, FactorSpec, PortfolioConfig, ResearchConfig
-from research.esim.experiment import default_paths, load_real_etf_dataset, run_experiment
+from research.esim.data import default_paths, load_real_etf_dataset
+from research.esim.experiment import run_experiment
 from research.esim.report import save_outputs
 
 

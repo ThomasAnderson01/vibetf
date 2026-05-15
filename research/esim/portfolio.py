@@ -1,27 +1,57 @@
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 import pandas as pd
 
-from .config import DataConfig
-from .config import PortfolioConfig
+from .config import DataConfig, PortfolioConfig
 from .schema import infer_horizon_from_return_column
 
 
-def _select_holdings(
-    group: pd.DataFrame,
-    factor_column: str,
-    instrument_column: str,
-    top_n: int,
-) -> dict[str, float]:
-    selected = group.nlargest(top_n, factor_column)
-    if selected.empty:
-        return {}
-    weight = 1.0 / len(selected)
-    return dict(zip(selected[instrument_column], [weight] * len(selected), strict=False))
+@runtime_checkable
+class SelectionStrategy(Protocol):
+    def select(
+        self,
+        group: pd.DataFrame,
+        factor_column: str,
+        instrument_column: str,
+        config: PortfolioConfig,
+    ) -> dict[str, float]: ...
+
+
+class EqualWeightTopN:
+    def select(
+        self,
+        group: pd.DataFrame,
+        factor_column: str,
+        instrument_column: str,
+        config: PortfolioConfig,
+    ) -> dict[str, float]:
+        selected = group.nlargest(config.top_n, factor_column)
+        if selected.empty:
+            return {}
+        weight = 1.0 / len(selected)
+        return dict(zip(selected[instrument_column], [weight] * len(selected), strict=False))
+
+
+SELECTION_REGISTRY: dict[str, SelectionStrategy] = {
+    "equal": EqualWeightTopN(),
+}
+
+
+def register_selection_strategy(name: str, strategy: SelectionStrategy) -> None:
+    if name in SELECTION_REGISTRY:
+        raise KeyError(f"选股策略已注册: {name}")
+    SELECTION_REGISTRY[name] = strategy
+
+
+def get_selection_strategy(name: str) -> SelectionStrategy:
+    try:
+        return SELECTION_REGISTRY[name]
+    except KeyError as exc:
+        raise KeyError(f"未知选股策略: {name}") from exc
 
 
 def _compute_turnover(previous: dict[str, float], current: dict[str, float]) -> float:
@@ -35,8 +65,7 @@ def simulate_top_n_portfolio(
     portfolio_config: PortfolioConfig,
     data_config: DataConfig,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    if portfolio_config.weighting != "equal":
-        raise ValueError(f"暂不支持的 weighting: {portfolio_config.weighting}")
+    strategy = get_selection_strategy(portfolio_config.weighting)
 
     rebalance_freq = portfolio_config.rebalance_freq_days or infer_horizon_from_return_column(
         portfolio_config.return_column
@@ -59,11 +88,11 @@ def simulate_top_n_portfolio(
         if trade_date not in rebalance_dates:
             continue
         group = group.dropna(subset=[factor_column, portfolio_config.return_column])
-        current_weights = _select_holdings(
+        current_weights = strategy.select(
             group,
             factor_column,
             instrument_column,
-            portfolio_config.top_n,
+            portfolio_config,
         )
         if len(current_weights) < portfolio_config.min_names:
             continue

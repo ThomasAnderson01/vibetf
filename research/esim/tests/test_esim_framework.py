@@ -9,7 +9,8 @@ import pandas as pd
 
 from research.esim.composite import build_composite_signal
 from research.esim.config import CompositeConfig, DataConfig, FactorSpec, PortfolioConfig, ResearchConfig
-from research.esim.experiment import load_real_etf_dataset, run_experiment
+from research.esim.data import load_real_etf_dataset
+from research.esim.experiment import run_experiment
 from research.esim.factors import compute_raw_factor_frame
 from research.esim.report import save_outputs
 from research.esim.sample_data import make_sample_stock_etf_daily_data
