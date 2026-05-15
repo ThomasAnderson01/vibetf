@@ -1,2 +1,14 @@
 # Local secrets and machine-specific configuration
 config.toml
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Editor settings
+.vscode/
+
+# Local data and research artifacts
+data/
+research/outputs/
+research/esim/output/
